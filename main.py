@@ -23,20 +23,19 @@ async def check_product():
             response = requests.get(URL, headers=headers)
             soup = BeautifulSoup(response.text, "html.parser")
 
-            current_state = soup.text.strip()
+            # Tarkistetaan vain "Saatavilla" tai "Ei saatavilla" -teksti
+            # Esimerkki: etsitään "Saatavilla" tai "Ei saatavilla"
+            current_state = "Saatavilla" if "Saatavilla" in soup.text else "Ei saatavilla"
 
             if last_state is None:
                 last_state = current_state
-            else:
-                if current_state != last_state:
-                    await channel.send("🔔 Tuotteen tila muuttui!")
-                    last_state = current_state
 
-            
-            await channel.send(f"Tuotteen tila tarkistettu: {current_state}")
+            elif current_state != last_state:
+                await channel.send(f"🔔 Tuotteen tila muuttui: {current_state}")
+                last_state = current_state
 
         except Exception as e:
-            print(f"Error: {e}")
+            print("Error:", e)
 
         await asyncio.sleep(300)
 
