@@ -26,11 +26,14 @@ async def check_product():
             current_state = soup.text.strip()
 
             if last_state is None:
-                last_state = current_state
+    last_state = current_state
+else:
+    if current_state != last_state:
+        await channel.send("🔔 Tuotteen tila muuttui!")
+        last_state = current_state
 
-            elif current_state != last_state:
-                await channel.send("🔔 Tuotteen tila muuttui!")
-                last_state = current_state
+
+await channel.send(f"Tuotteen tila tarkistettu: {current_state}")
 
         except Exception as e:
             print("Error:", e)
