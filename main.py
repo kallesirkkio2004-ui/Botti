@@ -15,7 +15,7 @@ async def check_product():
     await client.wait_until_ready()
     channel = client.get_channel(CHANNEL_ID)
 
-    was_available = False
+    last_state = None
 
     while True:
         try:
@@ -23,12 +23,14 @@ async def check_product():
             response = requests.get(URL, headers=headers)
             soup = BeautifulSoup(response.text, "html.parser")
 
-            if "Saatavilla" in soup.text:
-                if not was_available:
-                    await channel.send("🔥 Tuote on nyt saatavilla Prismassa!")
-                    was_available = True
-            else:
-                was_available = False
+            current_state = soup.text.strip()
+
+            if last_state is None:
+                last_state = current_state
+
+            elif current_state != last_state:
+                await channel.send("🔔 Tuotteen tila muuttui!")
+                last_state = current_state
 
         except Exception as e:
             print("Error:", e)
