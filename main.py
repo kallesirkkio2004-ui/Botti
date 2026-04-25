@@ -7,9 +7,9 @@ import os
 TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 URLS = [
-    "https://www.prisma.fi/tuotteet/111268553/pokemon-tcg-kerailykortit-me02-5-ascended-heroes-booster-bundle-111268553?listName=search+result&listNameExtra=ascended",
-    "https://www.prisma.fi/tuotteet/111268550/pokemon-tcg-kerailykortit-first-partner-collection-box-111268550",
-    "https://www.karkkainen.com/verkkokauppa/pokemon-tcg-me02-5-elite-trainer-box"
+    "https://www.prisma.fi/tuotteet/111268553/pokemon-tcg-kerailykortit-me02-5-ascended-heroes-booster-bundle-111268553?listName=search+result&listNameExtra=ascended",  # Prisma 1
+    "https://www.prisma.fi/tuotteet/111268550/pokemon-tcg-kerailykortit-first-partner-collection-box-111268550",  # Prisma 2
+    "https://www.karkkainen.com/verkkokauppa/pokemon-tcg-me02-5-elite-trainer-box"  # Kärkkäinen
 ]
 
 intents = discord.Intents.default()
@@ -30,15 +30,35 @@ async def check_product():
 
                 current_state = soup.text.strip()
 
+                
+                if "ei saatavilla" in current_state.lower():
+                    availability = "ei saatavilla"
+                elif "saatavilla" in current_state.lower():
+                    availability = "saatavilla"
+
+                
+                elif "loppu varastosta" in current_state.lower():
+                    availability = "loppu varastosta"
+                else:
+                    availability = "tuntematon"
+
                 if last_state[url] is None:
-                    last_state[url] = current_state
-                elif current_state != last_state[url]:
-                    await channel.send(f"🔔 {url} tuotteen tila muuttui!")
-                    last_state[url] = current_state
+                    last_state[url] = availability
+
+                
+                elif availability != last_state[url]:
+                    if availability == "saatavilla":
+                        await channel.send(f"🔥 Tuote on nyt saatavilla! {url}")
+                    elif availability == "ei saatavilla":
+                        await channel.send(f"❌ Tuote on nyt ei saatavilla! {url}")
+                    elif availability == "loppu varastosta":
+                        await channel.send(f"❌ Tuote on nyt loppu varastosta! {url}")
+                    last_state[url] = availability
+
         except Exception as e:
             print("Error:", e)
 
-        await asyncio.sleep(300)
+        await asyncio.sleep(300)  # Tarkistetaan tilanne 5 minuutin välein
 
 @client.event
 async def on_ready():
