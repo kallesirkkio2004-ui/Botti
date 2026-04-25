@@ -6,7 +6,11 @@ import os
 
 TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
-URL = os.getenv("URL")
+URLS = [
+    "https://www.prisma.fi/tuotteet/111268553/pokemon-tcg-kerailykortit-me02-5-ascended-heroes-booster-bundle-111268553?listName=search+result&listNameExtra=ascended",
+    "https://www.prisma.fi/tuotteet/111268550/pokemon-tcg-kerailykortit-first-partner-collection-box-111268550",
+    "https://www.karkkainen.com/verkkokauppa/pokemon-tcg-me02-5-elite-trainer-box"
+]
 
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
@@ -15,25 +19,22 @@ async def check_product():
     await client.wait_until_ready()
     channel = client.get_channel(CHANNEL_ID)
 
-    last_state = None
+    last_state = {url: None for url in URLS}
 
     while True:
         try:
-            headers = {"User-Agent": "Mozilla/5.0"}
-            response = requests.get(URL, headers=headers)
-            soup = BeautifulSoup(response.text, "html.parser")
+            for url in URLS:
+                headers = {"User-Agent": "Mozilla/5.0"}
+                response = requests.get(url, headers=headers)
+                soup = BeautifulSoup(response.text, "html.parser")
 
-            # Tarkistetaan vain "Saatavilla" tai "Ei saatavilla" -teksti
-            # Esimerkki: etsitään "Saatavilla" tai "Ei saatavilla"
-            current_state = "Saatavilla" if "Saatavilla" in soup.text else "Ei saatavilla"
+                current_state = soup.text.strip()
 
-            if last_state is None:
-                last_state = current_state
-
-            elif current_state != last_state:
-                await channel.send(f"🔔 Tuotteen tila muuttui: {current_state}")
-                last_state = current_state
-
+                if last_state[url] is None:
+                    last_state[url] = current_state
+                elif current_state != last_state[url]:
+                    await channel.send(f"🔔 {url} tuotteen tila muuttui!")
+                    last_state[url] = current_state
         except Exception as e:
             print("Error:", e)
 
