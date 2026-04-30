@@ -6,14 +6,37 @@ import os
 
 TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+
 URLS = [
-    "https://www.prisma.fi/tuotteet/111268553/pokemon-tcg-kerailykortit-me02-5-ascended-heroes-booster-bundle-111268553?listName=search+result&listNameExtra=ascended",  # Prisma 1
-    "https://www.prisma.fi/tuotteet/111268550/pokemon-tcg-kerailykortit-first-partner-collection-box-111268550",  # Prisma 2
-    "https://www.karkkainen.com/verkkokauppa/pokemon-tcg-me02-5-elite-trainer-box"  # Kärkkäinen
+    "https://www.prisma.fi/tuotteet/111268553/pokemon-tcg-kerailykortit-me02-5-ascended-heroes-booster-bundle-111268553",
+    "https://www.prisma.fi/tuotteet/111268550/pokemon-tcg-kerailykortit-first-partner-collection-box-111268550",
+    "https://www.karkkainen.com/verkkokauppa/pokemon-tcg-me02-5-elite-trainer-box"
 ]
 
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
+
+def check_availability(url, soup):
+    text = soup.get_text(" ", strip=True).lower()
+
+    # 🔵 Prisma
+    if "prisma.fi" in url:
+        if "ei saatavilla" in text:
+            return "ei saatavilla"
+        elif "loppu varastosta" in text:
+            return "loppu varastosta"
+        elif "lisää ostoskoriin" in text:
+            return "saatavilla"
+
+    # 🟠 Kärkkäinen
+    if "karkkainen.com" in url:
+        if "loppu varastosta" in text:
+            return "loppu varastosta"
+        elif "tilattavissa" in text or "ostoskoriin" in text:
+            return "saatavilla"
+
+    return "tuntematon"
+
 
 async def check_product():
     await client.wait_until_ready()
@@ -21,48 +44,39 @@ async def check_product():
 
     last_state = {url: None for url in URLS}
 
+    headers = {"User-Agent": "Mozilla/5.0"}
+
     while True:
         try:
             for url in URLS:
-                headers = {"User-Agent": "Mozilla/5.0"}
-                response = requests.get(url, headers=headers)
+                response = requests.get(url, headers=headers, timeout=10)
                 soup = BeautifulSoup(response.text, "html.parser")
 
-                current_state = soup.text.strip()
+                availability = check_availability(url, soup)
 
-                
-                if "ei saatavilla" in current_state.lower():
-                    availability = "ei saatavilla"
-                elif "saatavilla" in current_state.lower():
-                    availability = "saatavilla"
+                print(url, "->", availability)  # DEBUG
 
-                
-                elif "loppu varastosta" in current_state.lower():
-                    availability = "loppu varastosta"
-                else:
-                    availability = "tuntematon"
-
+                # Ensimmäinen kierros: vain tallennetaan tila
                 if last_state[url] is None:
                     last_state[url] = availability
+                    continue
 
-                
-                elif availability != last_state[url]:
-                    if availability == "saatavilla":
-                        await channel.send(f"🔥 Tuote on nyt saatavilla! {url}")
-                    elif availability == "ei saatavilla":
-                        await channel.send(f"❌ Tuote on nyt ei saatavilla! {url}")
-                    elif availability == "loppu varastosta":
-                        await channel.send(f"❌ Tuote on nyt loppu varastosta! {url}")
-                    last_state[url] = availability
+                # 🔥 Ilmoita VAIN kun tulee saataville
+                if availability == "saatavilla" and last_state[url] != "saatavilla":
+                    await channel.send(f"🔥 Tuote on taas saatavilla! {url}")
+
+                last_state[url] = availability
 
         except Exception as e:
             print("Error:", e)
 
-        await asyncio.sleep(300)  # Tarkistetaan tilanne 5 minuutin välein
+        await asyncio.sleep(300)  # 5 min
+
 
 @client.event
 async def on_ready():
-    print(f"Bot käynnissä: {client.user}")
+    print(f"Kirjautunut sisään: {client.user}")
     client.loop.create_task(check_product())
+
 
 client.run(TOKEN)
