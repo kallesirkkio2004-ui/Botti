@@ -7,10 +7,10 @@ import logging
 from bs4 import BeautifulSoup
 from collections import defaultdict
 from datetime import datetime
+from discord import app_commands
 
 # ---------------- CONFIG ----------------
 TOKEN = os.getenv("TOKEN")
-
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -30,14 +30,14 @@ log = logging.getLogger("bot")
 # ---------------- DISCORD ----------------
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
+tree = app_commands.CommandTree(client)
 
 # ---------------- STATE ----------------
 last_state = {}
 history = defaultdict(list)
-start_time = datetime.now()
-last_check_time = "Ei vielä"
+START_TIME = datetime.now()
+LAST_CHECK = "Ei vielä"
 
-# ---------------- HTTP SESSION ----------------
 session = None
 
 
@@ -68,10 +68,12 @@ def is_stable(url):
 # ---------------- FETCH ----------------
 async def fetch(url):
     try:
-        await asyncio.sleep(random.uniform(0.3, 1.2))  # anti-burst
+        await asyncio.sleep(random.uniform(0.3, 1.2))
+
         async with session.get(url, timeout=15) as resp:
             html = await resp.text()
             return url, BeautifulSoup(html, "html.parser")
+
     except Exception as e:
         log.warning(f"Fetch error {url}: {e}")
         return url, None
@@ -105,16 +107,15 @@ async def check_loop():
         return
 
     channel = client.get_channel(CHANNEL_ID)
-
-    if channel is None:
+    if not channel:
         log.error("Discord channel not found")
         return
 
-    global last_check_time
+    global LAST_CHECK
 
     while True:
         try:
-            last_check_time = datetime.now().strftime("%H:%M:%S")
+            LAST_CHECK = datetime.now().strftime("%H:%M:%S")
 
             results = await asyncio.gather(*[fetch(url) for url in URLS])
 
@@ -127,7 +128,6 @@ async def check_loop():
 
                 log.info(f"{url} -> {status}")
 
-                # init state
                 if url not in last_state:
                     last_state[url] = status
                     history[url].append(status)
@@ -137,11 +137,9 @@ async def check_loop():
                 if len(history[url]) > 5:
                     history[url].pop(0)
 
-                # ignore unstable results
                 if not is_stable(url):
                     continue
 
-                # alert only real change
                 if status == "in" and last_state[url] != "in":
 
                     embed = discord.Embed(
@@ -149,8 +147,6 @@ async def check_loop():
                         description=f"[{title}]({url})",
                         color=0x00ff00
                     )
-
-                    embed.add_field(name="Status", value="IN STOCK", inline=False)
 
                     await channel.send(embed=embed)
 
@@ -163,11 +159,49 @@ async def check_loop():
         except Exception as e:
             log.error(f"Loop error: {e}")
 
-        sleep_time = CHECK_INTERVAL + random.randint(-10, 20)
-        await asyncio.sleep(max(30, sleep_time))
+        await asyncio.sleep(CHECK_INTERVAL + random.randint(-10, 20))
 
 
-# ---------------- START ----------------
+# ---------------- COMMANDS ----------------
+@tree.command(name="ping", description="Botin viive")
+async def ping(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        f"🏓 Pong! {round(client.latency * 1000)}ms"
+    )
+
+
+@tree.command(name="status", description="Botin tila")
+async def status(interaction: discord.Interaction):
+
+    uptime = datetime.now() - START_TIME
+
+    embed = discord.Embed(
+        title="📊 Bot Status",
+        color=0x00ff00
+    )
+
+    embed.add_field(name="🟢 Status", value="Online", inline=True)
+    embed.add_field(name="📡 Latency", value=f"{round(client.latency * 1000)}ms", inline=True)
+    embed.add_field(name="📦 URLit", value=str(len(URLS)), inline=True)
+    embed.add_field(name="⏱ Check", value=f"{CHECK_INTERVAL}s", inline=True)
+    embed.add_field(name="🕒 Last check", value=LAST_CHECK, inline=True)
+    embed.add_field(name="⌛ Uptime", value=str(uptime).split('.')[0], inline=False)
+
+    await interaction.response.send_message(embed=embed)
+
+
+@tree.command(name="forcecheck", description="Pakota tarkistus nyt")
+async def forcecheck(interaction: discord.Interaction):
+    await interaction.response.send_message("🔄 Pakotettu tarkistus käynnissä...")
+
+    results = await asyncio.gather(*[fetch(url) for url in URLS])
+
+    for url, soup in results:
+        if soup:
+            log.info(f"Force check: {url} -> {check_availability(url, soup)}")
+
+
+# ---------------- READY ----------------
 @client.event
 async def on_ready():
     global session
@@ -181,22 +215,15 @@ async def on_ready():
         }
     )
 
+    await tree.sync()
+
     channel = client.get_channel(CHANNEL_ID)
 
     if channel:
         await channel.send("✅ Bot käynnissä")
+
     await send_telegram("✅ Bot online")
-
     client.loop.create_task(check_loop())
-
-
-# ---------------- CLEANUP ----------------
-@client.event
-async def on_disconnect():
-    log.warning("Bot disconnected")
-
-    if session:
-        await session.close()
 
 
 client.run(TOKEN)
