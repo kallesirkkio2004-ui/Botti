@@ -6,12 +6,12 @@ import random
 import logging
 from bs4 import BeautifulSoup
 from collections import defaultdict
+from datetime import datetime
 
 # ---------------- CONFIG ----------------
 TOKEN = os.getenv("TOKEN")
 
-CHANNEL_ID = os.getenv("CHANNEL_ID")
-CHANNEL_ID = int(CHANNEL_ID) if CHANNEL_ID else None
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -28,12 +28,16 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("bot")
 
 # ---------------- DISCORD ----------------
-client = discord.Client(intents=discord.Intents.default())
+intents = discord.Intents.default()
+client = discord.Client(intents=intents)
 
 # ---------------- STATE ----------------
 last_state = {}
 history = defaultdict(list)
+start_time = datetime.now()
+last_check_time = "Ei vielä"
 
+# ---------------- HTTP SESSION ----------------
 session = None
 
 
@@ -54,9 +58,17 @@ def check_availability(url, soup):
     return "unknown"
 
 
+def is_stable(url):
+    h = history[url]
+    if len(h) < 3:
+        return False
+    return h[-1] == h[-2] == h[-3]
+
+
 # ---------------- FETCH ----------------
 async def fetch(url):
     try:
+        await asyncio.sleep(random.uniform(0.3, 1.2))  # anti-burst
         async with session.get(url, timeout=15) as resp:
             html = await resp.text()
             return url, BeautifulSoup(html, "html.parser")
@@ -68,7 +80,6 @@ async def fetch(url):
 # ---------------- TELEGRAM ----------------
 async def send_telegram(message):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        log.error("Telegram env missing")
         return
 
     try:
@@ -79,9 +90,7 @@ async def send_telegram(message):
             "text": message,
             "parse_mode": "HTML"
         }) as resp:
-
-            result = await resp.text()
-            log.info(f"Telegram response: {result}")
+            log.info(f"Telegram: {await resp.text()}")
 
     except Exception as e:
         log.error(f"Telegram error: {e}")
@@ -91,14 +100,22 @@ async def send_telegram(message):
 async def check_loop():
     await client.wait_until_ready()
 
-    if not CHANNEL_ID:
-        log.error("CHANNEL_ID missing")
+    if CHANNEL_ID == 0:
+        log.error("CHANNEL_ID puuttuu")
         return
 
     channel = client.get_channel(CHANNEL_ID)
 
+    if channel is None:
+        log.error("Discord channel not found")
+        return
+
+    global last_check_time
+
     while True:
         try:
+            last_check_time = datetime.now().strftime("%H:%M:%S")
+
             results = await asyncio.gather(*[fetch(url) for url in URLS])
 
             for url, soup in results:
@@ -110,16 +127,21 @@ async def check_loop():
 
                 log.info(f"{url} -> {status}")
 
+                # init state
                 if url not in last_state:
                     last_state[url] = status
+                    history[url].append(status)
                     continue
 
-                # history tracking
                 history[url].append(status)
                 if len(history[url]) > 5:
                     history[url].pop(0)
 
-                # alert only real transition
+                # ignore unstable results
+                if not is_stable(url):
+                    continue
+
+                # alert only real change
                 if status == "in" and last_state[url] != "in":
 
                     embed = discord.Embed(
@@ -127,6 +149,8 @@ async def check_loop():
                         description=f"[{title}]({url})",
                         color=0x00ff00
                     )
+
+                    embed.add_field(name="Status", value="IN STOCK", inline=False)
 
                     await channel.send(embed=embed)
 
@@ -139,7 +163,8 @@ async def check_loop():
         except Exception as e:
             log.error(f"Loop error: {e}")
 
-        await asyncio.sleep(CHECK_INTERVAL + random.randint(-10, 15))
+        sleep_time = CHECK_INTERVAL + random.randint(-10, 20)
+        await asyncio.sleep(max(30, sleep_time))
 
 
 # ---------------- START ----------------
@@ -151,17 +176,27 @@ async def on_ready():
 
     session = aiohttp.ClientSession(
         headers={
-            "User-Agent": "Mozilla/5.0",
+            "User-Agent": "Mozilla/5.0 (StockBot/1.0)",
             "Accept-Language": "fi-FI,fi;q=0.9"
         }
     )
 
     channel = client.get_channel(CHANNEL_ID)
 
-    await channel.send("✅ Bot käynnissä")
-    await send_telegram("✅ Bot online (Telegram toimii)")
+    if channel:
+        await channel.send("✅ Bot käynnissä")
+    await send_telegram("✅ Bot online")
 
     client.loop.create_task(check_loop())
+
+
+# ---------------- CLEANUP ----------------
+@client.event
+async def on_disconnect():
+    log.warning("Bot disconnected")
+
+    if session:
+        await session.close()
 
 
 client.run(TOKEN)
