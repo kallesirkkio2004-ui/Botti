@@ -4,7 +4,6 @@ import os
 import aiohttp
 import random
 import logging
-import atexit
 from bs4 import BeautifulSoup
 from collections import defaultdict
 
@@ -17,26 +16,19 @@ CHANNEL_ID = int(CHANNEL_ID) if CHANNEL_ID else None
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-ROLE_ID = None
-
 URLS = [
+    "https://www.verkkokauppa.com/fi/product/980138/Pokemon-SV10-boosters-kerailykortit-36-pack",
     "https://www.prisma.fi/tuotteet/111268553/pokemon-tcg-kerailykortit-me02-5-ascended-heroes-booster-bundle-111268553",
-    "https://www.prisma.fi/tuotteet/111268550/pokemon-tcg-kerailykortit-first-partner-collection-box-111268550",
-    "https://www.prisma.fi/tuotteet/111239016/pokemon-tcg-me02-5-premium-poster-collection-erilaisia-111239016",
-    "https://www.karkkainen.com/verkkokauppa/pokemon-tcg-me02-5-elite-trainer-box",
-    "https://www.verkkokauppa.com/fi/product/1037336/Pokemon-First-Partner-Collection-Box-Series-1-kerailykorttis",
-    "https://www.verkkokauppa.com/fi/product/980138/Pokemon-SV10-boosters-kerailykortit-36-pack"
 ]
 
 CHECK_INTERVAL = 60
 
 # ---------------- LOGGING ----------------
 logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("restock-bot")
+log = logging.getLogger("bot")
 
 # ---------------- DISCORD ----------------
-intents = discord.Intents.default()
-client = discord.Client(intents=intents)
+client = discord.Client(intents=discord.Intents.default())
 
 # ---------------- STATE ----------------
 last_state = {}
@@ -50,39 +42,19 @@ def get_title(soup):
     return soup.title.text.strip() if soup.title else "Tuote"
 
 
-def is_false_positive(history_list):
-    if len(history_list) < 3:
-        return False
-    return len(set(history_list[-3:])) == 1
-
-
 def check_availability(url, soup):
     text = soup.get_text(" ", strip=True).lower()
 
-    if "prisma.fi" in url:
-        if "ei saatavilla" in text or "loppu varastosta" in text:
-            return "out"
-        if "lisää ostoskoriin" in text or "tilattavissa" in text:
-            return "in"
+    if "ei saatavilla" in text or "loppu varastosta" in text:
+        return "out"
 
-    if "karkkainen.com" in url:
-        if "loppu varastosta" in text:
-            return "out"
-        if "ostoskoriin" in text or "tilattavissa" in text:
-            return "in"
-
-    if "verkkokauppa.com" in url:
-        if "ei saatavilla" in text or "loppu varastosta" in text:
-            return "out"
-
-        for b in soup.find_all("button"):
-            if "ostoskoriin" in b.get_text().lower():
-                return "in"
+    if "ostoskoriin" in text or "lisää ostoskoriin" in text:
+        return "in"
 
     return "unknown"
 
 
-# ---------------- NETWORK ----------------
+# ---------------- FETCH ----------------
 async def fetch(url):
     try:
         async with session.get(url, timeout=15) as resp:
@@ -96,7 +68,7 @@ async def fetch(url):
 # ---------------- TELEGRAM ----------------
 async def send_telegram(message):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        log.warning("Telegram missing env vars")
+        log.error("Telegram env missing")
         return
 
     try:
@@ -112,10 +84,10 @@ async def send_telegram(message):
             log.info(f"Telegram response: {result}")
 
     except Exception as e:
-        log.warning(f"Telegram error: {e}")
+        log.error(f"Telegram error: {e}")
 
 
-# ---------------- CORE LOOP ----------------
+# ---------------- LOOP ----------------
 async def check_loop():
     await client.wait_until_ready()
 
@@ -142,14 +114,12 @@ async def check_loop():
                     last_state[url] = status
                     continue
 
+                # history tracking
                 history[url].append(status)
                 if len(history[url]) > 5:
                     history[url].pop(0)
 
-                # false positive filter (kevyt, ei blokkaa liikaa)
-                if is_false_positive(history[url]):
-                    continue
-
+                # alert only real transition
                 if status == "in" and last_state[url] != "in":
 
                     embed = discord.Embed(
@@ -158,14 +128,10 @@ async def check_loop():
                         color=0x00ff00
                     )
 
-                    embed.add_field(name="Status", value="IN STOCK", inline=False)
-
-                    msg = f"<@&{ROLE_ID}>" if ROLE_ID else ""
-
-                    await channel.send(content=msg, embed=embed)
+                    await channel.send(embed=embed)
 
                     await send_telegram(
-                        f"🔥 <b>TUOTE SAATAVILLA</b>\n\n<b>{title}</b>\n\n{url}"
+                        f"🔥 <b>RESTOCK!</b>\n\n<b>{title}</b>\n\n{url}"
                     )
 
                 last_state[url] = status
@@ -173,11 +139,10 @@ async def check_loop():
         except Exception as e:
             log.error(f"Loop error: {e}")
 
-        sleep_time = CHECK_INTERVAL + random.randint(-10, 15)
-        await asyncio.sleep(max(30, sleep_time))
+        await asyncio.sleep(CHECK_INTERVAL + random.randint(-10, 15))
 
 
-# ---------------- STARTUP ----------------
+# ---------------- START ----------------
 @client.event
 async def on_ready():
     global session
@@ -187,23 +152,16 @@ async def on_ready():
     session = aiohttp.ClientSession(
         headers={
             "User-Agent": "Mozilla/5.0",
-            "Accept-Language": "fi-FI,fi;q=0.9,en;q=0.8"
+            "Accept-Language": "fi-FI,fi;q=0.9"
         }
     )
 
     channel = client.get_channel(CHANNEL_ID)
 
-    await channel.send("✅ Restock-botti käynnissä!")
-    await send_telegram("✅ Bot online")
+    await channel.send("✅ Bot käynnissä")
+    await send_telegram("✅ Bot online (Telegram toimii)")
 
     client.loop.create_task(check_loop())
-
-
-# ---------------- CLEANUP ----------------
-@atexit.register
-def cleanup():
-    if session:
-        log.info("Session cleanup triggered")
 
 
 client.run(TOKEN)
