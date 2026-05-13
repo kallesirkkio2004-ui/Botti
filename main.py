@@ -29,7 +29,7 @@ URLS = [
     "https://www.verkkokauppa.com/fi/product/980099/Pokemon-TCG-Scarlet-Violet-Destined-Rivals-Elite-Trainer-Box"
 ]
 
-CHECK_INTERVAL = 60
+CHECK_INTERVAL = 60  # tarkistusväli sekunteina
 
 # ---------------- LOGGING ----------------
 logging.basicConfig(level=logging.INFO)
@@ -48,63 +48,57 @@ LAST_CHECK = "Ei vielä"
 
 session = None
 
-
 # ---------------- HELPERS ----------------
 def get_title(soup):
     return soup.title.text.strip() if soup.title else "Tuote"
 
-
 def check_availability(url, soup):
+    """Tarkistaa onko tuote saatavilla vai ei useilla avainsanoilla"""
     text = soup.get_text(" ", strip=True).lower()
 
-    if "ei saatavilla" in text or "loppu varastosta" in text:
-        return "out"
+    out_words = ["ei saatavilla", "loppu varastosta", "sold out"]
+    in_words = ["ostoskoriin", "lisää ostoskoriin", "varastossa", "in stock", "add to cart"]
 
-    if "ostoskoriin" in text or "lisää ostoskoriin" in text:
-        return "in"
-
+    for w in out_words:
+        if w in text:
+            return "out"
+    for w in in_words:
+        if w in text:
+            return "in"
     return "unknown"
 
-
 def is_stable(url):
+    """Varmistaa että tila on sama viimeiset kolme tarkistusta ennen ilmoitusta"""
     h = history[url]
     if len(h) < 3:
         return False
     return h[-1] == h[-2] == h[-3]
 
-
 # ---------------- FETCH ----------------
 async def fetch(url):
     try:
-        await asyncio.sleep(random.uniform(0.3, 1.2))
-
+        await asyncio.sleep(random.uniform(0.3, 1.2))  # satunnainen viive
         async with session.get(url, timeout=15) as resp:
             html = await resp.text()
             return url, BeautifulSoup(html, "html.parser")
-
     except Exception as e:
         log.warning(f"Fetch error {url}: {e}")
         return url, None
-
 
 # ---------------- TELEGRAM ----------------
 async def send_telegram(message):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return
-
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-
         async with session.post(url, data={
             "chat_id": TELEGRAM_CHAT_ID,
             "text": message,
             "parse_mode": "HTML"
         }) as resp:
             log.info(f"Telegram: {await resp.text()}")
-
     except Exception as e:
         log.error(f"Telegram error: {e}")
-
 
 # ---------------- LOOP ----------------
 async def check_loop():
@@ -124,7 +118,6 @@ async def check_loop():
     while True:
         try:
             LAST_CHECK = datetime.now().strftime("%H:%M:%S")
-
             results = await asyncio.gather(*[fetch(url) for url in URLS])
 
             for url, soup in results:
@@ -148,19 +141,25 @@ async def check_loop():
                 if not is_stable(url):
                     continue
 
+                # 🔥 lähetä ilmoitus kun tila muuttuu saatavaksi
                 if status == "in" and last_state[url] != "in":
-
                     embed = discord.Embed(
                         title="🔥 TUOTE SAATAVILLA!",
                         description=f"[{title}]({url})",
                         color=0x00ff00
                     )
-
                     await channel.send(embed=embed)
+                    await send_telegram(f"🔥 <b>RESTOCK!</b>\n\n<b>{title}</b>\n\n{url}")
 
-                    await send_telegram(
-                        f"🔥 <b>RESTOCK!</b>\n\n<b>{title}</b>\n\n{url}"
+                # 🔴 ilmoitus loppumisesta (valinnainen)
+                if status == "out" and last_state[url] != "out":
+                    embed = discord.Embed(
+                        title="⚠️ TUOTE LOPPU!",
+                        description=f"[{title}]({url})",
+                        color=0xff0000
                     )
+                    await channel.send(embed=embed)
+                    await send_telegram(f"⚠️ <b>OUT OF STOCK</b>\n\n<b>{title}</b>\n\n{url}")
 
                 last_state[url] = status
 
@@ -169,7 +168,6 @@ async def check_loop():
 
         await asyncio.sleep(CHECK_INTERVAL + random.randint(-10, 20))
 
-
 # ---------------- COMMANDS ----------------
 @tree.command(name="ping", description="Botin viive")
 async def ping(interaction: discord.Interaction):
@@ -177,61 +175,29 @@ async def ping(interaction: discord.Interaction):
         f"🏓 Pong! {round(client.latency * 1000)}ms"
     )
 
-
 @tree.command(name="status", description="Botin tila")
 async def status(interaction: discord.Interaction):
-
     uptime = datetime.now() - START_TIME
-
-    embed = discord.Embed(
-        title="📊 Bot Status",
-        color=0x00ff00
-    )
-
+    embed = discord.Embed(title="📊 Bot Status", color=0x00ff00)
     embed.add_field(name="🟢 Status", value="Online", inline=True)
     embed.add_field(name="📡 Latency", value=f"{round(client.latency * 1000)}ms", inline=True)
     embed.add_field(name="📦 URLit", value=str(len(URLS)), inline=True)
     embed.add_field(name="⏱ Check", value=f"{CHECK_INTERVAL}s", inline=True)
     embed.add_field(name="🕒 Last check", value=LAST_CHECK, inline=True)
     embed.add_field(name="⌛ Uptime", value=str(uptime).split('.')[0], inline=False)
-
     await interaction.response.send_message(embed=embed)
-
 
 @tree.command(name="forcecheck", description="Pakota tarkistus nyt")
 async def forcecheck(interaction: discord.Interaction):
     await interaction.response.send_message("🔄 Pakotettu tarkistus käynnissä...")
-
     results = await asyncio.gather(*[fetch(url) for url in URLS])
-
     for url, soup in results:
         if soup:
             log.info(f"Force check: {url} -> {check_availability(url, soup)}")
-
 
 # ---------------- READY ----------------
 @client.event
 async def on_ready():
     global session
-
     log.info(f"Logged in as {client.user}")
-
-    session = aiohttp.ClientSession(
-        headers={
-            "User-Agent": "Mozilla/5.0 (StockBot/1.0)",
-            "Accept-Language": "fi-FI,fi;q=0.9"
-        }
-    )
-
-    await tree.sync()
-
-    channel = client.get_channel(CHANNEL_ID)
-
-    if channel:
-        await channel.send("✅ Bot käynnissä")
-
-    await send_telegram("✅ Bot online")
-    client.loop.create_task(check_loop())
-
-
-client.run(TOKEN)
+    session = aiohttp.Client
