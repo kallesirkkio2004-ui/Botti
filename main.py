@@ -4,12 +4,15 @@ import os
 import aiohttp
 import random
 import logging
+import atexit
 from bs4 import BeautifulSoup
 from collections import defaultdict
 
 # ---------------- CONFIG ----------------
 TOKEN = os.getenv("TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+CHANNEL_ID = int(CHANNEL_ID) if CHANNEL_ID else None
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -22,11 +25,7 @@ URLS = [
     "https://www.prisma.fi/tuotteet/111239016/pokemon-tcg-me02-5-premium-poster-collection-erilaisia-111239016",
     "https://www.karkkainen.com/verkkokauppa/pokemon-tcg-me02-5-elite-trainer-box",
     "https://www.verkkokauppa.com/fi/product/1037336/Pokemon-First-Partner-Collection-Box-Series-1-kerailykorttis",
-    "https://www.verkkokauppa.com/fi/product/1037318/Pokemon-ME02-5-Premium-Poster-Collection-Mega-Lucario-ex-Meg",
-    "https://www.verkkokauppa.com/fi/product/1037309/Pokemon-ME02-5-Ascended-Heroes-Booster-Bundle-kerailykorttip",
-    "https://www.verkkokauppa.com/fi/product/1031984/Pokemon-TCG-ME02-5-Ascended-Heroes-Elite-Trainer-Box-keraily",
-    "https://www.verkkokauppa.com/fi/product/980138/Pokemon-SV10-boosters-kerailykortit-36-pack",
-    "https://www.verkkokauppa.com/fi/product/980099/Pokemon-TCG-Scarlet-Violet-Destined-Rivals-Elite-Trainer-Box"
+    "https://www.verkkokauppa.com/fi/product/980138/Pokemon-SV10-boosters-kerailykortit-36-pack"
 ]
 
 CHECK_INTERVAL = 60
@@ -43,7 +42,6 @@ client = discord.Client(intents=intents)
 last_state = {}
 history = defaultdict(list)
 
-# ---------------- HTTP SESSION ----------------
 session = None
 
 
@@ -52,38 +50,33 @@ def get_title(soup):
     return soup.title.text.strip() if soup.title else "Tuote"
 
 
-def is_false_positive(url, status_history):
-    # 3 peräkkäistä "in" tai "out" tekee päätöksen luotettavammaksi
-    if len(status_history) < 3:
+def is_false_positive(history_list):
+    if len(history_list) < 3:
         return False
-    return len(set(status_history[-3:])) == 1
+    return len(set(history_list[-3:])) == 1
 
 
 def check_availability(url, soup):
     text = soup.get_text(" ", strip=True).lower()
 
-    # Prisma
     if "prisma.fi" in url:
         if "ei saatavilla" in text or "loppu varastosta" in text:
             return "out"
         if "lisää ostoskoriin" in text or "tilattavissa" in text:
             return "in"
 
-    # Kärkkäinen
     if "karkkainen.com" in url:
         if "loppu varastosta" in text:
             return "out"
         if "ostoskoriin" in text or "tilattavissa" in text:
             return "in"
 
-    # Verkkokauppa
     if "verkkokauppa.com" in url:
         if "ei saatavilla" in text or "loppu varastosta" in text:
             return "out"
 
         for b in soup.find_all("button"):
-            t = b.get_text().lower()
-            if "ostoskoriin" in t:
+            if "ostoskoriin" in b.get_text().lower():
                 return "in"
 
     return "unknown"
@@ -91,8 +84,6 @@ def check_availability(url, soup):
 
 # ---------------- NETWORK ----------------
 async def fetch(url):
-    global session
-
     try:
         async with session.get(url, timeout=15) as resp:
             html = await resp.text()
@@ -104,6 +95,10 @@ async def fetch(url):
 
 # ---------------- TELEGRAM ----------------
 async def send_telegram(message):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        log.warning("Telegram missing env vars")
+        return
+
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
@@ -111,8 +106,10 @@ async def send_telegram(message):
             "chat_id": TELEGRAM_CHAT_ID,
             "text": message,
             "parse_mode": "HTML"
-        }) as _:
-            pass
+        }) as resp:
+
+            result = await resp.text()
+            log.info(f"Telegram response: {result}")
 
     except Exception as e:
         log.warning(f"Telegram error: {e}")
@@ -121,17 +118,19 @@ async def send_telegram(message):
 # ---------------- CORE LOOP ----------------
 async def check_loop():
     await client.wait_until_ready()
-    channel = client.get_channel(CHANNEL_ID)
 
-    global last_state
+    if not CHANNEL_ID:
+        log.error("CHANNEL_ID missing")
+        return
+
+    channel = client.get_channel(CHANNEL_ID)
 
     while True:
         try:
-            # ⚡ Rinnakkainen haku
             results = await asyncio.gather(*[fetch(url) for url in URLS])
 
             for url, soup in results:
-                if soup is None:
+                if not soup:
                     continue
 
                 status = check_availability(url, soup)
@@ -139,7 +138,6 @@ async def check_loop():
 
                 log.info(f"{url} -> {status}")
 
-                # init
                 if url not in last_state:
                     last_state[url] = status
                     continue
@@ -148,11 +146,10 @@ async def check_loop():
                 if len(history[url]) > 5:
                     history[url].pop(0)
 
-                # 🔒 estä väärät triggerit
-                if not is_false_positive(url, history[url]):
+                # false positive filter (kevyt, ei blokkaa liikaa)
+                if is_false_positive(history[url]):
                     continue
 
-                # 🔥 vain transition
                 if status == "in" and last_state[url] != "in":
 
                     embed = discord.Embed(
@@ -176,12 +173,11 @@ async def check_loop():
         except Exception as e:
             log.error(f"Loop error: {e}")
 
-        # 🧠 jitter = näyttää ihmismäiseltä & vähentää kuormaa
         sleep_time = CHECK_INTERVAL + random.randint(-10, 15)
         await asyncio.sleep(max(30, sleep_time))
 
 
-# ---------------- DISCORD READY ----------------
+# ---------------- STARTUP ----------------
 @client.event
 async def on_ready():
     global session
@@ -190,7 +186,7 @@ async def on_ready():
 
     session = aiohttp.ClientSession(
         headers={
-            "User-Agent": "Mozilla/5.0 (compatible; StockChecker/1.0)",
+            "User-Agent": "Mozilla/5.0",
             "Accept-Language": "fi-FI,fi;q=0.9,en;q=0.8"
         }
     )
@@ -203,10 +199,11 @@ async def on_ready():
     client.loop.create_task(check_loop())
 
 
-@client.event
-async def on_close():
+# ---------------- CLEANUP ----------------
+@atexit.register
+def cleanup():
     if session:
-        await session.close()
+        log.info("Session cleanup triggered")
 
 
 client.run(TOKEN)
