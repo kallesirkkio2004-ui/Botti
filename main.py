@@ -16,28 +16,14 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# ---------------- URLS (RYHMITELTY NOPEUDEN MUKAAN) ----------------
-URL_GROUPS = {
-    "fast": [
-        "https://www.verkkokauppa.com/fi/product/980138/...",
-    ],
-    "medium": [
-        "https://www.prisma.fi/tuotteet/111268553/...",
-        "https://www.karkkainen.com/verkkokauppa/...",
-    ],
-    "slow": [
-        "https://eurotcg.com/be/product/pokemon-booster-bundle-mega-evolution-ascended-heroes-pre-order",
-        "https://www.playingcardshop.eu/...",
-    ]
-}
+URLS = [
+    # SUN URLIT TÄHÄN
+]
 
-INTERVALS = {
-    "fast": (18, 28),
-    "medium": (28, 45),
-    "slow": (40, 70),
-}
+# 🔥 BASE INTERVAL (adaptiivinen)
+BASE_MIN = 18
+BASE_MAX = 40
 
-# ---------------- LOGGING ----------------
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("bot")
 
@@ -48,134 +34,177 @@ tree = app_commands.CommandTree(client)
 
 # ---------------- STATE ----------------
 last_state = {}
-last_seen_change = {}
-START_TIME = datetime.now()
-LAST_CHECK = "Ei vielä"
+fail_count = defaultdict(int)
+last_check = "Ei vielä"
+start_time = datetime.now()
 
 session = None
 
-
-# ---------------- HELPERS ----------------
-def get_title(soup):
-    return soup.title.text.strip() if soup.title else "Tuote"
-
-
+# ---------------- STOCK DETECTION ----------------
 def check_availability(soup):
     text = soup.get_text(" ", strip=True).lower()
 
-    # parempi detection
-    if "loppu" in text or "out of stock" in text or "sold out" in text:
-        return "out"
+    out_signals = [
+        "ei saatavilla",
+        "loppu varastosta",
+        "out of stock",
+        "sold out",
+        "tilapäisesti loppu",
+        "ei varastossa"
+    ]
 
-    if "ostoskoriin" in text or "add to cart" in text or "pre-order" in text:
-        return "in"
+    in_signals = [
+        "ostoskoriin",
+        "add to cart",
+        "buy now",
+        "pre-order",
+        "varastossa"
+    ]
 
+    for s in out_signals:
+        if s in text:
+            return "out"
+
+    for s in in_signals:
+        if s in text:
+            return "in"
+
+    # fallback: epävarma
     return "unknown"
 
+
+def get_title(soup):
+    return soup.title.text.strip() if soup.title else "Tuote"
+
+# ---------------- ADAPTIVE SPEED ----------------
+def get_delay():
+    """
+    Dynamic interval:
+    - jos paljon virheitä → hidastaa
+    - jos kaikki ok → nopeuttaa
+    """
+    error_factor = sum(fail_count.values())
+
+    if error_factor > 10:
+        return random.randint(40, 70)  # slowdown mode
+
+    if error_factor > 5:
+        return random.randint(25, 50)
+
+    return random.randint(BASE_MIN, BASE_MAX)
 
 # ---------------- FETCH ----------------
 async def fetch(url):
     try:
-        await asyncio.sleep(random.uniform(0.3, 1.0))
+        await asyncio.sleep(random.uniform(0.2, 0.8))  # anti-burst
 
-        async with session.get(url, timeout=15) as resp:
+        async with session.get(url, timeout=12) as resp:
+            if resp.status != 200:
+                fail_count[url] += 1
+                return url, None
+
             html = await resp.text()
             return url, BeautifulSoup(html, "html.parser")
 
-    except Exception as e:
-        log.warning(f"Fetch error {url}: {e}")
+    except Exception:
+        fail_count[url] += 1
         return url, None
 
-
 # ---------------- TELEGRAM ----------------
-async def send_telegram(message):
+async def send_telegram(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return
 
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-
-        async with session.post(url, data={
+        await session.post(url, data={
             "chat_id": TELEGRAM_CHAT_ID,
-            "text": message,
+            "text": msg,
             "parse_mode": "HTML"
-        }) as resp:
-            log.info(await resp.text())
-
-    except Exception as e:
-        log.error(f"Telegram error: {e}")
-
-
-# ---------------- CORE CHECK ----------------
-async def check_url(url):
-    _, soup = await fetch(url)
-    if not soup:
-        return
-
-    status = check_availability(soup)
-    title = get_title(soup)
-
-    old = last_state.get(url)
-
-    # ensimmäinen init
-    if old is None:
-        last_state[url] = status
-        return
-
-    # 🔥 MUUTOS DETECTION
-    if status != old:
-
-        # instant recheck (varmistus ilman viivettä)
-        _, soup2 = await fetch(url)
-        if soup2:
-            status2 = check_availability(soup2)
-        else:
-            status2 = status
-
-        # hyväksy vain jos sama muutos
-        if status == status2:
-
-            if status == "in":
-
-                channel = client.get_channel(CHANNEL_ID)
-
-                embed = discord.Embed(
-                    title="🔥 RESTOCK!",
-                    description=f"[{title}]({url})",
-                    color=0x00ff00
-                )
-
-                await channel.send(embed=embed)
-                await send_telegram(f"🔥 <b>RESTOCK</b>\n\n<b>{title}</b>\n{url}")
-
-            last_state[url] = status
-            last_seen_change[url] = datetime.now()
-
+        })
+    except:
+        pass
 
 # ---------------- LOOP ----------------
-async def worker(group_name, urls):
+async def check_loop():
+    await client.wait_until_ready()
+
+    channel = client.get_channel(CHANNEL_ID)
+    if not channel:
+        log.error("Channel not found")
+        return
+
+    global last_check
+
     while True:
+        try:
+            last_check = datetime.now().strftime("%H:%M:%S")
 
-        global LAST_CHECK
-        LAST_CHECK = datetime.now().strftime("%H:%M:%S")
+            # 🔥 PARALLEL FETCH (no slowdown)
+            results = await asyncio.gather(*[fetch(u) for u in URLS])
 
-        tasks = [check_url(url) for url in urls]
-        await asyncio.gather(*tasks)
+            for url, soup in results:
+                if not soup:
+                    continue
 
-        await asyncio.sleep(random.randint(*INTERVALS[group_name]))
+                status = check_availability(soup)
+                title = get_title(soup)
 
+                log.info(f"{url} -> {status}")
+
+                if url not in last_state:
+                    last_state[url] = status
+                    continue
+
+                # 🔥 INSTANT ALERT (NO DELAY FILTERS)
+                if status == "in" and last_state[url] != "in":
+
+                    embed = discord.Embed(
+                        title="🔥 RESTOCK DETECTED",
+                        description=f"[{title}]({url})",
+                        color=0x00ff00
+                    )
+
+                    await channel.send(embed=embed)
+
+                    await send_telegram(
+                        f"🔥 RESTOCK\n\n{title}\n\n{url}"
+                    )
+
+                last_state[url] = status
+
+        except Exception as e:
+            log.error(f"Loop error: {e}")
+
+        # 🔥 ADAPTIVE SLEEP (key improvement)
+        await asyncio.sleep(get_delay())
+
+# ---------------- COMMANDS ----------------
+@tree.command(name="status")
+async def status(interaction: discord.Interaction):
+    uptime = datetime.now() - start_time
+
+    embed = discord.Embed(title="Bot Status", color=0x00ff00)
+    embed.add_field(name="URLs", value=len(URLS))
+    embed.add_field(name="Latency", value=f"{round(client.latency*1000)}ms")
+    embed.add_field(name="Last Check", value=last_check)
+    embed.add_field(name="Uptime", value=str(uptime).split('.')[0])
+
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="ping")
+async def ping(interaction: discord.Interaction):
+    await interaction.response.send_message(f"Pong {round(client.latency*1000)}ms")
 
 # ---------------- READY ----------------
 @client.event
 async def on_ready():
     global session
 
-    log.info(f"Logged in as {client.user}")
-
     session = aiohttp.ClientSession(
         headers={
-            "User-Agent": "Mozilla/5.0",
-            "Accept-Language": "fi-FI,fi;q=0.9"
+            "User-Agent": "Mozilla/5.0 (StockBot)",
+            "Accept-Language": "fi,en;q=0.8"
         }
     )
 
@@ -183,13 +212,8 @@ async def on_ready():
 
     channel = client.get_channel(CHANNEL_ID)
     if channel:
-        await channel.send("✅ FAST RESTOCK BOT v2 käynnissä")
+        await channel.send("✅ ULTRA BOT ONLINE")
 
-    await send_telegram("✅ Bot online v2")
-
-    # 🔥 start workers per speed group
-    for group, urls in URL_GROUPS.items():
-        client.loop.create_task(worker(group, urls))
-
+    client.loop.create_task(check_loop())
 
 client.run(TOKEN)
