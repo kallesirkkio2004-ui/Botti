@@ -27,8 +27,7 @@ URLS = [
     "https://www.verkkokauppa.com/fi/product/1037309/Pokemon-ME02-5-Ascended-Heroes-Booster-Bundle-kerailykorttip",
     "https://www.verkkokauppa.com/fi/product/1031984/Pokemon-TCG-ME02-5-Ascended-Heroes-Elite-Trainer-Box-keraily",
     "https://www.verkkokauppa.com/fi/product/980099/Pokemon-TCG-Scarlet-Violet-Destined-Rivals-Elite-Trainer-Box",
-
-    # 🌍 EU
+    # 🇪🇺 ENGLANTI / EUROOPPA
     "https://eurotcg.com/be/product/pokemon-booster-bundle-mega-evolution-ascended-heroes-pre-order",
     "https://eurotcg.com/be/product/pokemon-elite-trainer-box-mega-evolution-ascended-heroes-pre-order",
     "https://eurotcg.com/be/product/pokemon-booster-box-destined-rivals",
@@ -37,10 +36,7 @@ URLS = [
     "https://www.playingcardshop.eu/pokemon-tcg-scarlet-and-violet-destined-rivals-elite-trainer-box.html"
 ]
 
-# ---------------- SPEED SETTINGS ----------------
-BASE_MIN = 10
-BASE_MAX = 25
-
+# ---------------- LOGGING ----------------
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("bot")
 
@@ -51,65 +47,56 @@ tree = app_commands.CommandTree(client)
 
 # ---------------- STATE ----------------
 last_state = {}
-notified = set()
-last_check = "Ei vielä"
 start_time = datetime.now()
-
 session = None
 
-# ---------------- STOCK CHECK ----------------
-def check_availability(soup):
-    text = soup.get_text(" ", strip=True).lower()
+# ---------------- STOCK DETECTION ----------------
+def check_availability(text: str):
+    text = text.lower()
 
-    # 🟥 OUT
-    if any(x in text for x in [
-        "ei saatavilla", "loppu varastosta", "out of stock",
-        "sold out", "ei varastossa"
-    ]):
-        return "out"
+    out_signals = [
+        "ei saatavilla",
+        "loppu varastosta",
+        "out of stock",
+        "sold out",
+        "tilapäisesti loppu",
+        "ei varastossa"
+    ]
+    in_signals = [
+        "ostoskoriin",
+        "add to cart",
+        "buy now",
+        "pre-order",
+        "varastossa",
+        "in stock"
+    ]
 
-    # 🟢 IN
-    if any(x in text for x in [
-        "ostoskoriin", "add to cart", "buy now",
-        "pre-order", "varastossa", "in stock"
-    ]):
-        return "in"
-
-    # 🧠 DOM fallback (button check)
-    if soup.select_one("button"):
-        btn_text = soup.select_one("button").get_text(strip=True).lower()
-        if "cart" in btn_text or "buy" in btn_text:
+    for s in out_signals:
+        if s in text:
+            return "out"
+    for s in in_signals:
+        if s in text:
             return "in"
-
     return "unknown"
 
-
 def get_title(soup):
-    return soup.title.text.strip() if soup.title else "Tuote"
+    return soup.title.text.strip() if soup and soup.title else "Tuote"
 
-# ---------------- FETCH (FAST + RETRY) ----------------
+# ---------------- FETCH ----------------
 async def fetch(url):
-    for _ in range(2):  # retry kevyt
-        try:
-            await asyncio.sleep(random.uniform(0.2, 0.6))
-
-            async with session.get(url, timeout=12) as resp:
-                if resp.status != 200:
-                    continue
-
-                html = await resp.text()
-                return url, BeautifulSoup(html, "html.parser")
-
-        except:
-            continue
-
-    return url, None
+    try:
+        async with session.get(url, timeout=12) as resp:
+            if resp.status != 200:
+                return url, None
+            html = await resp.text()
+            return url, html
+    except Exception:
+        return url, None
 
 # ---------------- TELEGRAM ----------------
 async def send_telegram(msg):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return
-
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         await session.post(url, data={
@@ -120,92 +107,74 @@ async def send_telegram(msg):
     except:
         pass
 
-# ---------------- LOOP (ULTRA FAST STREAM MODE) ----------------
-async def check_loop():
-    await client.wait_until_ready()
-
-    channel = client.get_channel(CHANNEL_ID)
-    if not channel:
-        log.error("Channel not found")
-        return
-
-    global last_check
-
+# ---------------- SINGLE URL MONITOR ----------------
+async def monitor_url(url):
+    global last_state
     while True:
-        try:
-            last_check = datetime.now().strftime("%H:%M:%S")
+        _, html = await fetch(url)
+        if html:
+            soup = BeautifulSoup(html, "html.parser")
+            text = soup.get_text(" ", strip=True)
+            status = check_availability(text)
+            title = get_title(soup)
 
-            tasks = [fetch(url) for url in URLS]
+            log.info(f"{url} -> {status}")
 
-            for coro in asyncio.as_completed(tasks):
-                url, soup = await coro
-
-                if not soup:
-                    continue
-
-                status = check_availability(soup)
-                title = get_title(soup)
-
-                log.info(f"{status} -> {url}")
-
-                if url not in last_state:
-                    last_state[url] = status
-                    continue
-
-                # 🔥 ONLY NEW RESTOCK
-                if status == "in" and last_state[url] != "in":
-
-                    if url in notified:
-                        continue
-
-                    notified.add(url)
-
+            if url not in last_state:
+                last_state[url] = status
+            elif status == "in" and last_state[url] != "in":
+                # SEND ALERT
+                channel = client.get_channel(CHANNEL_ID)
+                if channel:
                     embed = discord.Embed(
-                        title="🔥 RESTOCK ALERT",
+                        title="🔥 RESTOCK DETECTED",
                         description=f"[{title}]({url})",
                         color=0x00ff00
                     )
-
                     await channel.send(embed=embed)
-                    await send_telegram(f"🔥 RESTOCK\n\n{title}\n\n{url}")
+                await send_telegram(f"🔥 RESTOCK\n\n{title}\n\n{url}")
 
                 last_state[url] = status
+            else:
+                last_state[url] = status
 
-        except Exception as e:
-            log.error(f"Loop error: {e}")
-
-        await asyncio.sleep(random.randint(BASE_MIN, BASE_MAX))
-
-# ---------------- COMMANDS ----------------
-@tree.command(name="status")
-async def status(interaction: discord.Interaction):
-    uptime = datetime.now() - start_time
-
-    embed = discord.Embed(title="Bot Status", color=0x00ff00)
-    embed.add_field(name="URLs", value=len(URLS))
-    embed.add_field(name="Last Check", value=last_check)
-    embed.add_field(name="Uptime", value=str(uptime).split('.')[0])
-
-    await interaction.response.send_message(embed=embed)
+        # SMALL RANDOM DELAY FOR SAFETY
+        await asyncio.sleep(random.uniform(3, 7))  # 3–7 sekuntia per URL
 
 # ---------------- READY ----------------
 @client.event
 async def on_ready():
     global session
+    log.info(f"Logged in as {client.user}")
 
     session = aiohttp.ClientSession(
         headers={
-            "User-Agent": "Mozilla/5.0 (StockBot Ultra)",
+            "User-Agent": "Mozilla/5.0 (StockBot)",
             "Accept-Language": "fi,en;q=0.8"
         }
     )
 
     await tree.sync()
-
     channel = client.get_channel(CHANNEL_ID)
     if channel:
-        await channel.send("🚀 ULTRA FAST BOT ONLINE")
+        await channel.send("✅ ULTRA BOT ONLINE")
 
-    client.loop.create_task(check_loop())
+    # START MONITORING EACH URL IN ITS OWN TASK
+    for url in URLS:
+        client.loop.create_task(monitor_url(url))
+
+# ---------------- COMMANDS ----------------
+@tree.command(name="status")
+async def status(interaction: discord.Interaction):
+    uptime = datetime.now() - start_time
+    embed = discord.Embed(title="Bot Status", color=0x00ff00)
+    embed.add_field(name="URLs", value=len(URLS))
+    embed.add_field(name="Latency", value=f"{round(client.latency*1000)}ms")
+    embed.add_field(name="Uptime", value=str(uptime).split('.')[0])
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="ping")
+async def ping(interaction: discord.Interaction):
+    await interaction.response.send_message(f"Pong {round(client.latency*1000)}ms")
 
 client.run(TOKEN)
