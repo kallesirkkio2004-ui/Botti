@@ -16,10 +16,9 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+# ---------------- URLS (SÄILYTETTY + KORJATTU) ----------------
 URLS = [
-    # SUN URLIT TÄHÄN # 🇫🇮
-    
-     SUOMI
+    # 🇫🇮 SUOMI
     "https://www.verkkokauppa.com/fi/product/980138/Pokemon-SV10-boosters-kerailykortit-36-pack",
     "https://www.prisma.fi/tuotteet/111268553/pokemon-tcg-kerailykortit-me02-5-ascended-heroes-booster-bundle-111268553",
     "https://www.prisma.fi/tuotteet/111268550/pokemon-tcg-kerailykortit-first-partner-collection-box-111268550",
@@ -31,7 +30,7 @@ URLS = [
     "https://www.verkkokauppa.com/fi/product/1031984/Pokemon-TCG-ME02-5-Ascended-Heroes-Elite-Trainer-Box-keraily",
     "https://www.verkkokauppa.com/fi/product/980099/Pokemon-TCG-Scarlet-Violet-Destined-Rivals-Elite-Trainer-Box",
 
-    # 🇪🇺 ENGLISH / EUROPE STORES
+    # 🇪🇺 ENGLANTI / EUROOPPA
     "https://eurotcg.com/be/product/pokemon-booster-bundle-mega-evolution-ascended-heroes-pre-order",
     "https://eurotcg.com/be/product/pokemon-elite-trainer-box-mega-evolution-ascended-heroes-pre-order",
     "https://eurotcg.com/be/product/pokemon-booster-box-destined-rivals",
@@ -40,10 +39,11 @@ URLS = [
     "https://www.playingcardshop.eu/pokemon-tcg-scarlet-and-violet-destined-rivals-elite-trainer-box.html"
 ]
 
-# 🔥 BASE INTERVAL (adaptiivinen)
+# ---------------- SPEED ----------------
 BASE_MIN = 18
 BASE_MAX = 40
 
+# ---------------- LOGGING ----------------
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("bot")
 
@@ -60,9 +60,9 @@ start_time = datetime.now()
 
 session = None
 
-# ---------------- STOCK DETECTION ----------------
-def check_availability(soup):
-    text = soup.get_text(" ", strip=True).lower()
+# ---------------- STOCK DETECTION (PARANNETTU) ----------------
+def check_availability(text: str):
+    text = text.lower()
 
     out_signals = [
         "ei saatavilla",
@@ -78,7 +78,8 @@ def check_availability(soup):
         "add to cart",
         "buy now",
         "pre-order",
-        "varastossa"
+        "varastossa",
+        "in stock"
     ]
 
     for s in out_signals:
@@ -89,34 +90,16 @@ def check_availability(soup):
         if s in text:
             return "in"
 
-    # fallback: epävarma
     return "unknown"
 
 
 def get_title(soup):
-    return soup.title.text.strip() if soup.title else "Tuote"
-
-# ---------------- ADAPTIVE SPEED ----------------
-def get_delay():
-    """
-    Dynamic interval:
-    - jos paljon virheitä → hidastaa
-    - jos kaikki ok → nopeuttaa
-    """
-    error_factor = sum(fail_count.values())
-
-    if error_factor > 10:
-        return random.randint(40, 70)  # slowdown mode
-
-    if error_factor > 5:
-        return random.randint(25, 50)
-
-    return random.randint(BASE_MIN, BASE_MAX)
+    return soup.title.text.strip() if soup and soup.title else "Tuote"
 
 # ---------------- FETCH ----------------
 async def fetch(url):
     try:
-        await asyncio.sleep(random.uniform(0.2, 0.8))  # anti-burst
+        await asyncio.sleep(random.uniform(0.2, 0.8))
 
         async with session.get(url, timeout=12) as resp:
             if resp.status != 200:
@@ -124,7 +107,7 @@ async def fetch(url):
                 return url, None
 
             html = await resp.text()
-            return url, BeautifulSoup(html, "html.parser")
+            return url, html
 
     except Exception:
         fail_count[url] += 1
@@ -160,14 +143,14 @@ async def check_loop():
         try:
             last_check = datetime.now().strftime("%H:%M:%S")
 
-            # 🔥 PARALLEL FETCH (no slowdown)
             results = await asyncio.gather(*[fetch(u) for u in URLS])
 
-            for url, soup in results:
-                if not soup:
+            for url, html in results:
+                if not html:
                     continue
 
-                status = check_availability(soup)
+                soup = BeautifulSoup(html, "html.parser")
+                status = check_availability(soup.get_text(" ", strip=True))
                 title = get_title(soup)
 
                 log.info(f"{url} -> {status}")
@@ -176,7 +159,7 @@ async def check_loop():
                     last_state[url] = status
                     continue
 
-                # 🔥 INSTANT ALERT (NO DELAY FILTERS)
+                # 🔥 INSTANT ALERT
                 if status == "in" and last_state[url] != "in":
 
                     embed = discord.Embed(
@@ -196,8 +179,7 @@ async def check_loop():
         except Exception as e:
             log.error(f"Loop error: {e}")
 
-        # 🔥 ADAPTIVE SLEEP (key improvement)
-        await asyncio.sleep(get_delay())
+        await asyncio.sleep(random.randint(BASE_MIN, BASE_MAX))
 
 # ---------------- COMMANDS ----------------
 @tree.command(name="status")
@@ -214,7 +196,9 @@ async def status(interaction: discord.Interaction):
 
 @tree.command(name="ping")
 async def ping(interaction: discord.Interaction):
-    await interaction.response.send_message(f"Pong {round(client.latency*1000)}ms")
+    await interaction.response.send_message(
+        f"Pong {round(client.latency*1000)}ms"
+    )
 
 # ---------------- READY ----------------
 @client.event
