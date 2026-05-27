@@ -1,20 +1,21 @@
-import discord
-import asyncio
 import os
-import aiohttp
+import asyncio
 import random
 import logging
-from bs4 import BeautifulSoup
 from datetime import datetime
-from discord import app_commands
-from urllib.parse import urlparse
 
-# ---------------- CONFIG ----------------
+import discord
+from discord import app_commands
+from playwright.async_api import async_playwright
+from bs4 import BeautifulSoup
+
+# ================= CONFIG =================
+
 TOKEN = os.getenv("TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+CHECK_MIN = 20
+CHECK_MAX = 45
 
 URLS = [
     # 🇫🇮 SUOMI
@@ -38,95 +39,85 @@ URLS = [
     "https://www.playingcardshop.eu/pokemon-tcg-scarlet-and-violet-destined-rivals-elite-trainer-box.html"
 ]
 
-# ---------------- LOGGING ----------------
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+# ================= LOGGING =================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
+
 log = logging.getLogger("bot")
 
-# ---------------- DISCORD ----------------
+# ================= DISCORD =================
+
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
-# ---------------- STATE ----------------
+# ================= STATE =================
+
 last_state = {}
-session = None
-start_time = datetime.now()
+playwright = None
+browser = None
 
-# ---------------- STOCK LOGIC ----------------
-OUT_SIGNALS = [
-    "ei saatavilla", "loppu varastosta", "out of stock",
-    "sold out", "tilapäisesti loppu", "ei varastossa"
-]
+# ================= STOCK DETECTION =================
 
-IN_SIGNALS = [
-    "ostoskoriin", "add to cart", "buy now",
-    "pre-order", "varastossa", "in stock"
-]
-
-def check_availability(text: str):
+def detect_stock(url: str, html: str, text: str) -> str:
+    html = html.lower()
     text = text.lower()
 
-    found_in = any(s in text for s in IN_SIGNALS)
-    found_out = any(s in text for s in OUT_SIGNALS)
+    # ---- PRISMA ----
+    if "prisma.fi" in url:
+        if "ostoskoriin" in html:
+            return "in"
+        if "ei saatavilla" in html or "loppu varastosta" in html:
+            return "out"
+        return "unknown"
 
-    # IMPORTANT: IN overrides OUT
-    if found_in:
+    # ---- VERKKOKAUPPA / K-RAUTA / GENERIC ----
+    in_signals = ["add to cart", "ostoskoriin", "buy now", "in stock", "varastossa"]
+    out_signals = ["ei saatavilla", "out of stock", "sold out", "loppu varastosta"]
+
+    if any(x in text for x in in_signals):
         return "in"
-    if found_out:
+    if any(x in text for x in out_signals):
         return "out"
+
     return "unknown"
 
-def get_title(soup):
-    return soup.title.text.strip() if soup.title else "Product"
+# ================= FETCH =================
 
-# ---------------- FETCH ----------------
-async def fetch(url):
+async def fetch(url: str):
     try:
-        async with session.get(url, timeout=20) as resp:
-            if resp.status != 200:
-                return None
+        page = await browser.new_page()
 
-            html = await resp.text()
+        await page.goto(url, wait_until="networkidle", timeout=60000)
+        await page.wait_for_timeout(3000)
 
-            lowered = html.lower()
+        html = await page.content()
 
-            if "captcha" in lowered or "access denied" in lowered:
-                log.warning(f"Blocked: {url}")
-                return None
+        await page.close()
 
-            return html
+        return html
 
     except Exception as e:
-        log.error(f"Fetch error {url}: {e}")
+        log.error(f"FETCH ERROR {url} | {e}")
         return None
 
-# ---------------- ALERT ----------------
-async def send_alert(title, url):
+# ================= ALERT =================
+
+async def send_alert(url: str):
     channel = client.get_channel(CHANNEL_ID)
-
-    if channel:
-        embed = discord.Embed(
-            title="🔥 RESTOCK DETECTED",
-            url=url,
-            description=f"[{title}]({url})",
-            color=0x00ff00
-        )
-        embed.add_field(name="Link", value=url, inline=False)
-
-        await channel.send(content="@everyone", embed=embed)
-
-# Telegram optional
-async def send_telegram(msg):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+    if not channel:
         return
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        await session.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
-    except:
-        pass
 
-# ---------------- MONITOR ----------------
-async def monitor_url(url):
+    await channel.send(
+        f"🔥 **RESTOCK DETECTED**\n{url}\n@everyone"
+    )
+
+# ================= MONITOR =================
+
+async def monitor(url: str):
     global last_state
 
     while True:
@@ -135,62 +126,55 @@ async def monitor_url(url):
         if html:
             soup = BeautifulSoup(html, "html.parser")
             text = soup.get_text(" ", strip=True)
-            title = get_title(soup)
-            status = check_availability(text)
 
+            status = detect_stock(url, html, text)
             prev = last_state.get(url)
 
-            log.info(f"{url} -> {status}")
+            log.info(f"{status.upper():8} | {url}")
 
-            # FIRST RUN
+            # FIRST RUN (no alert)
             if prev is None:
                 last_state[url] = status
-                if status == "in":
-                    await send_alert(title, url)
+                continue
 
             # STATE CHANGE
-            elif prev != status:
+            if prev != status:
+                log.warning(f"CHANGE {prev} -> {status}")
                 last_state[url] = status
 
                 if status == "in":
-                    await send_alert(title, url)
+                    await send_alert(url)
 
-        await asyncio.sleep(random.uniform(25, 50))
+        await asyncio.sleep(random.randint(CHECK_MIN, CHECK_MAX))
 
-# ---------------- READY ----------------
+# ================= READY =================
+
 @client.event
 async def on_ready():
-    global session
+    global playwright, browser
 
     log.info(f"Logged in as {client.user}")
 
-    session = aiohttp.ClientSession(
-        headers={
-            "User-Agent": "Mozilla/5.0 (StockBot)",
-            "Accept-Language": "fi,en;q=0.8"
-        }
+    playwright = await async_playwright().start()
+
+    browser = await playwright.chromium.launch(
+        headless=True,
+        args=["--no-sandbox"]
     )
 
-    await tree.sync()
+    for url in URLS:
+        asyncio.create_task(monitor(url))
 
     channel = client.get_channel(CHANNEL_ID)
     if channel:
-        await channel.send("✅ BOT ONLINE")
+        await channel.send("✅ STOCK BOT ONLINE")
 
-    for url in URLS:
-        asyncio.create_task(monitor_url(url))
-
-# ---------------- COMMANDS ----------------
-@tree.command(name="status")
-async def status(interaction: discord.Interaction):
-    uptime = datetime.now() - start_time
-    await interaction.response.send_message(
-        f"URLs: {len(URLS)}\nUptime: {str(uptime).split('.')[0]}"
-    )
+# ================= COMMANDS =================
 
 @tree.command(name="ping")
 async def ping(interaction: discord.Interaction):
-    await interaction.response.send_message(f"Pong {round(client.latency*1000)}ms")
+    await interaction.response.send_message("pong")
 
-# ---------------- RUN ----------------
+# ================= RUN =================
+
 client.run(TOKEN)
