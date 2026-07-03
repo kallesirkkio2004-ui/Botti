@@ -31,7 +31,8 @@ URLS = [
     "https://www.verkkokauppa.com/fi/product/1031984/Pokemon-TCG-ME02-5-Ascended-Heroes-Elite-Trainer-Box-keraily",
     "https://www.verkkokauppa.com/fi/product/980099/Pokemon-TCG-Scarlet-Violet-Destined-Rivals-Elite-Trainer-Box",
     "https://www.prisma.fi/tuotteet/111354656/poke-first-partner-collection-box-2-19-6-111354656"
-
+    "https://www.karkkainen.com/verkkokauppa/pokemon-first-partner-collection-box-2-kerailykortit"
+    
     # 🇪🇺 EUROOPPA
     "https://eurotcg.com/be/product/pokemon-booster-bundle-mega-evolution-ascended-heroes-pre-order",
     "https://eurotcg.com/be/product/pokemon-elite-trainer-box-mega-evolution-ascended-heroes-pre-order",
