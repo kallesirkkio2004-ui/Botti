@@ -107,6 +107,9 @@ URLS = [
     "https://www.prisma.fi/tuotteet/111268549/pokemon-tcg-kerailykortit-me025-ascended-heroes-ex-box-erilaisia-111268549",
     "https://www.karkkainen.com/verkkokauppa/pokemon-first-partner-collection-box-2-kerailykortit",
     "https://www.muovitukku.fi/tuote/pokemon-tcg-first-partner-illustration-collection-series-2/",
+    "https://www.muovitukku.fi/tuote/pokemon-tcg-mega-evolution-ascended-heroes-booster-bundle/",
+    "https://www.muovitukku.fi/tuote/pokemon-tcg-me5-pitch-black-elite-trainer-box-julkaisupaiva-17-7-2026/",
+    "https://www.muovitukku.fi/tuote/pokemon-tcg-me5-pitch-black-booster-bundle-julkaisupaiva-17-7-2026/",
 
     # Eurooppa
     "https://eurotcg.com/be/product/pokemon-booster-bundle-mega-evolution-ascended-heroes-pre-order",
