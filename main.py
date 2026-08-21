@@ -112,6 +112,8 @@ URLS = [
     "https://www.muovitukku.fi/tuote/pokemon-tcg-me5-pitch-black-booster-bundle-julkaisupaiva-17-7-2026/",
     "https://www.prisma.fi/tuotteet/111354652/poke-first-partner-collection-box-3-78-111354652",
     "https://www.karkkainen.com/verkkokauppa/pokemon-first-partner-collection-box-3-kerailykortit",
+    "https://peliparatiisi.net/products/pokemon-tcg-30th-celebration-elite-trainer-box?_pos=2&_sid=a7f17e2b7&_ss=r",
+    "https://www.korttistoppi.fi/tuote/pokemon-tcg-30th-celebration-elite-trainer-box-julkaisupaiva-1692026?category=30th-celebration",
 
     # Eurooppa
     "https://eurotcg.com/be/product/pokemon-booster-bundle-mega-evolution-ascended-heroes-pre-order",
