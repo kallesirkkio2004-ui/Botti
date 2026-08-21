@@ -114,7 +114,8 @@ URLS = [
     "https://www.karkkainen.com/verkkokauppa/pokemon-first-partner-collection-box-3-kerailykortit",
     "https://peliparatiisi.net/products/pokemon-tcg-30th-celebration-elite-trainer-box?_pos=2&_sid=a7f17e2b7&_ss=r",
     "https://www.korttistoppi.fi/tuote/pokemon-tcg-30th-celebration-elite-trainer-box-julkaisupaiva-1692026?category=30th-celebration",
-
+    "https://www.tcgkauppa.fi/tuote/pokemon-30th-celebration-elite-trainer-box/?srsltid=AfmBOor12IgwnYv16dDMBm_Wa_Cqb4htSJowKVpXB9-MZeFI_9GZwEHo",
+    
     # Eurooppa
     "https://eurotcg.com/be/product/pokemon-booster-bundle-mega-evolution-ascended-heroes-pre-order",
     "https://eurotcg.com/be/product/pokemon-elite-trainer-box-mega-evolution-ascended-heroes-pre-order",
