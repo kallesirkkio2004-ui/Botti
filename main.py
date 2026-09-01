@@ -116,7 +116,7 @@ URLS = [
     "https://www.korttistoppi.fi/tuote/pokemon-tcg-30th-celebration-elite-trainer-box-julkaisupaiva-1692026?category=30th-celebration",
     "https://www.tcgkauppa.fi/tuote/pokemon-30th-celebration-elite-trainer-box/?srsltid=AfmBOor12IgwnYv16dDMBm_Wa_Cqb4htSJowKVpXB9-MZeFI_9GZwEHo",
     "https://pokepulls.fi/product/pokemon-tcg-30th-celebration-elite-trainer-box-julkaisu-16-9-2026",
-    
+    "https://www.prisma.fi/tuotteet/111388851/pokemon-sv85-prismatic-evolutions-super-premium-collection-eevee-111388851",
     # Eurooppa
     "https://eurotcg.com/be/product/pokemon-booster-bundle-mega-evolution-ascended-heroes-pre-order",
     "https://eurotcg.com/be/product/pokemon-elite-trainer-box-mega-evolution-ascended-heroes-pre-order",
